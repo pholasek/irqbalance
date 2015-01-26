@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <glib.h>
+#include <glib-unix.h>
 #include <syslog.h>
 #include <limits.h>
 

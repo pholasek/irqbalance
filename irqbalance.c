@@ -243,23 +243,68 @@ static void force_rebalance_irq(struct irq_info *info, void *data __attribute__(
 	info->assigned_obj = NULL;
 }
 
-static void handler(int signum)
+gboolean handler(gpointer data)
 {
-	(void)signum;
 	keep_going = 0;
+	return FALSE;
 }
 
-static void force_rescan(int signum)
+gboolean force_rescan(gpointer data)
 {
-	(void)signum;
 	if (cycle_count)
 		need_rescan = 1;
+	return FALSE;
+}
+
+gboolean scan_func(gpointer data)
+{
+	log(TO_CONSOLE, LOG_INFO, "\n\n\n-----------------------------------------------------------------------------\n");
+	clear_work_stats();
+	parse_proc_interrupts();
+	parse_proc_stat();
+
+	/* cope with cpu hotplug -- detected during /proc/interrupts parsing */
+	if (need_rescan) {
+		need_rescan = 0;
+		cycle_count = 0;
+		log(TO_CONSOLE, LOG_INFO, "Rescanning cpu topology \n");
+		clear_work_stats();
+
+		free_object_tree();
+		build_object_tree();
+		for_each_irq(NULL, force_rebalance_irq, NULL);
+		parse_proc_interrupts();
+		parse_proc_stat();
+		sleep_approx(SLEEP_INTERVAL);
+		clear_work_stats();
+		parse_proc_interrupts();
+		parse_proc_stat();
+	} 
+
+	if (cycle_count)	
+		update_migration_status();
+
+	calculate_placement();
+	activate_mappings();
+
+	if (debug_mode)
+		dump_tree();
+	if (one_shot_mode)
+		keep_going = 0;
+	cycle_count++;
+
+	if (keep_going)
+		return TRUE;
+	else
+		return FALSE;
 }
 
 int main(int argc, char** argv)
 {
 	struct sigaction action, hupaction;
 	sigset_t sigset, old_sigset;
+
+	GMainLoop * main_loop;
 
 	sigemptyset(&sigset);
 	sigaddset(&sigset,SIGINT);
@@ -358,18 +403,11 @@ int main(int argc, char** argv)
 		}
 	}
 
-	action.sa_handler = handler;
-	sigemptyset(&action.sa_mask);
-	action.sa_flags = 0;
-	sigaction(SIGINT, &action, NULL);
-	sigaction(SIGTERM, &action, NULL);
-	sigaction(SIGUSR1, &action, NULL);
-	sigaction(SIGUSR2, &action, NULL);
-
-	hupaction.sa_handler = force_rescan;
-	sigemptyset(&hupaction.sa_mask);
-	hupaction.sa_flags = 0;
-	sigaction(SIGHUP, &hupaction, NULL);
+	g_unix_signal_add(SIGINT, handler, NULL);
+	g_unix_signal_add(SIGTERM, handler, NULL);
+	g_unix_signal_add(SIGUSR1, handler, NULL);
+	g_unix_signal_add(SIGUSR2, handler, NULL);
+	g_unix_signal_add(SIGHUP, force_rescan, NULL);
 
 	sigprocmask(SIG_SETMASK, &old_sigset, NULL);
 
@@ -385,46 +423,13 @@ int main(int argc, char** argv)
 	parse_proc_interrupts();
 	parse_proc_stat();
 
-	while (keep_going) {
-		sleep_approx(sleep_interval);
-		log(TO_CONSOLE, LOG_INFO, "\n\n\n-----------------------------------------------------------------------------\n");
+	main_loop = g_main_loop_new(NULL, FALSE);
+	g_timeout_add_seconds(SLEEP_INTERVAL, scan_func, NULL);
 
+	g_main_loop_run(main_loop);
 
-		clear_work_stats();
-		parse_proc_interrupts();
-		parse_proc_stat();
+	g_main_loop_quit(main_loop);
 
-		/* cope with cpu hotplug -- detected during /proc/interrupts parsing */
-		if (need_rescan) {
-			need_rescan = 0;
-			cycle_count = 0;
-			log(TO_CONSOLE, LOG_INFO, "Rescanning cpu topology \n");
-			clear_work_stats();
-
-			free_object_tree();
-			build_object_tree();
-			for_each_irq(NULL, force_rebalance_irq, NULL);
-			parse_proc_interrupts();
-			parse_proc_stat();
-			sleep_approx(sleep_interval);
-			clear_work_stats();
-			parse_proc_interrupts();
-			parse_proc_stat();
-		} 
-
-		if (cycle_count)	
-			update_migration_status();
-
-		calculate_placement();
-		activate_mappings();
-	
-		if (debug_mode)
-			dump_tree();
-		if (one_shot_mode)
-			keep_going = 0;
-		cycle_count++;
-
-	}
 	free_object_tree();
 	free_cl_opts();
 

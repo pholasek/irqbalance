@@ -31,6 +31,8 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #ifdef HAVE_GETOPT_LONG 
 #include <getopt.h>
@@ -42,6 +44,7 @@
 #include "irqbalance.h"
 
 volatile int keep_going = 1;
+int socket_fd;
 int one_shot_mode;
 int debug_mode;
 int foreground_mode;
@@ -59,6 +62,7 @@ char *banscript = NULL;
 char *polscript = NULL;
 long HZ;
 int sleep_interval = SLEEP_INTERVAL;
+GMainLoop * main_loop;
 
 static void sleep_approx(int seconds)
 {
@@ -246,14 +250,15 @@ static void force_rebalance_irq(struct irq_info *info, void *data __attribute__(
 gboolean handler(gpointer data)
 {
 	keep_going = 0;
-	return FALSE;
+	g_main_loop_quit(main_loop);
+	return TRUE;
 }
 
 gboolean force_rescan(gpointer data)
 {
 	if (cycle_count)
 		need_rescan = 1;
-	return FALSE;
+	return TRUE;
 }
 
 gboolean scan_func(gpointer data)
@@ -299,12 +304,61 @@ gboolean scan_func(gpointer data)
 		return FALSE;
 }
 
+gboolean sock_handle(gint fd, GIOCondition condition, gpointer user_data)
+{
+	char buff[100];
+	int ret, rec_sock;
+
+	if (condition == G_IO_IN) {
+		rec_sock = accept(fd, NULL, NULL);
+		if (rec_sock < 0) {
+			perror("accept");
+			return TRUE;
+		}
+		ret = recv(rec_sock, buff, 100, 0);
+		if (ret < 0) {
+			perror("recv");
+			return TRUE;
+		} else {
+			printf("\n***%s***\n", buff);
+			close(rec_sock);
+		}
+		
+	}
+
+	return TRUE;
+}
+
+int init_socket()
+{
+	struct sockaddr_un addr;
+	int ret;
+
+	socket_fd = socket(AF_LOCAL, SOCK_STREAM, 0);
+
+	if (socket_fd < 0) {
+		log(TO_ALL, LOG_WARNING, "Socket couldn't be created.\n");
+		return 1;
+	}
+
+	addr.sun_family = AF_UNIX;
+	strcpy(addr.sun_path, SOCKET_PATH);
+	addr.sun_path[strlen(addr.sun_path)] = '\0';
+	ret = bind(socket_fd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
+
+	if (ret < 0) {
+		log(TO_ALL, LOG_WARNING, "Daemon couldn't be bound to the socket.\n");
+		return 1;
+	}
+
+	listen(socket_fd, 1);
+	g_unix_fd_add(socket_fd, G_IO_IN, sock_handle, NULL);
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
-	struct sigaction action, hupaction;
 	sigset_t sigset, old_sigset;
-
-	GMainLoop * main_loop;
 
 	sigemptyset(&sigset);
 	sigaddset(&sigset,SIGINT);
@@ -423,6 +477,8 @@ int main(int argc, char** argv)
 	parse_proc_interrupts();
 	parse_proc_stat();
 
+	init_socket();
+
 	main_loop = g_main_loop_new(NULL, FALSE);
 	g_timeout_add_seconds(SLEEP_INTERVAL, scan_func, NULL);
 
@@ -436,6 +492,9 @@ int main(int argc, char** argv)
 	/* Remove pidfile */
 	if (!foreground_mode && pidfile)
 		unlink(pidfile);
+	/* Remove socket */
+	close(socket_fd);
+	unlink("/tmp/irqbalance.sock");
 
 	return EXIT_SUCCESS;
 }

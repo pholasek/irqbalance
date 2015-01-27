@@ -177,5 +177,7 @@ extern unsigned int log_mask;
 }while(0)
 #endif /* HAVE_LIBSYSTEMD */
 
+#define SOCKET_PATH "/tmp/irqbalance.sock"
+
 #endif /* __INCLUDE_GUARD_IRQBALANCE_H_ */
 

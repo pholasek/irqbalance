@@ -60,9 +60,13 @@ cpumask_t unbanned_cpus;
 
 /*
  * By default do not place IRQs on CPUs the kernel keeps isolated,
- * as specified through the isolcpus= boot commandline. Users can
- * override this with the IRQBALANCE_BANNED_CPUS environment variable.
- */
+ * as specified through the isolcpus= boot commandline. Also do not
+ * place IRQs on adaptive-ticks CPUs not receiving scheduling-clock
+ * while running only one task specified through the nohz_full= boot
+ * commandline argument.
+ * Users can override this with the IRQBALANCE_BANNED_CPUS environment
+ * variable.
+*/
 static int find_cmdline_cpumask(const char *param, char *line, cpumask_t out)
 {
 	char *c;
@@ -76,11 +80,7 @@ static int find_cmdline_cpumask(const char *param, char *line, cpumask_t out)
 		len = end - c;
 
 		cpulist_parse(c, len, out);
-
-		return 0;
 	}
-
-	return 1;
 }
 
 static void setup_banned_cpus(void)
@@ -89,6 +89,8 @@ static void setup_banned_cpus(void)
 	char *line = NULL;
 	size_t size = 0;
 	const char *isolcpus = "isolcpus=";
+	const char *nohz_full = "nohz_full=";
+	cpumask_t isolcpus_mask, nohz_full_mask;
 	char buffer[4096];
 
 	/* A manually specified cpumask overrides auto-detection. */
@@ -104,14 +106,18 @@ static void setup_banned_cpus(void)
 	if (getline(&line, &size, file) <= 0)
 		goto out2;
 
-	find_cmdline_cpumask(isolcpus, line, banned_cpus);
+	find_cmdline_cpumask(isolcpus, line, isolcpus_mask);
+	find_cmdline_cpumask(nohz_full, line, nohz_full_mask);
+	cpus_or(banned_cpus, isolcpus_mask, nohz_full_mask);
+	free(line);
 
  out2:
 	fclose(file);
  out:
-	cpumask_scnprintf(buffer, 4096, banned_cpus);
+	cpumask_scnprintf(buffer, 4096, isolcpus_mask);
 	log(TO_CONSOLE, LOG_INFO, "Isolated CPUs: %s\n", buffer);
-	free(line);
+	cpumask_scnprintf(buffer, 4096, nohz_full_mask);
+	log(TO_CONSOLE, LOG_INFO, "Adaptive-tisks CPUs: %s\n", buffer);
 }
 
 static struct topo_obj* add_cache_domain_to_package(struct topo_obj *cache, 

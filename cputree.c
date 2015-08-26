@@ -63,10 +63,30 @@ cpumask_t unbanned_cpus;
  * as specified through the isolcpus= boot commandline. Users can
  * override this with the IRQBALANCE_BANNED_CPUS environment variable.
  */
+static int find_cmdline_cpumask(const char *param, char *line, cpumask_t out)
+{
+	char *c;
+
+	if ((c = strstr(line, param))) {
+		char *end;
+		int len;
+
+		c += strlen(param);
+		for (end = c; *end != ' ' && *end != '\0' && *end != '\n'; end++);
+		len = end - c;
+
+		cpulist_parse(c, len, out);
+
+		return 0;
+	}
+
+	return 1;
+}
+
 static void setup_banned_cpus(void)
 {
 	FILE *file;
-	char *c, *line = NULL;
+	char *line = NULL;
 	size_t size = 0;
 	const char *isolcpus = "isolcpus=";
 	char buffer[4096];
@@ -84,16 +104,7 @@ static void setup_banned_cpus(void)
 	if (getline(&line, &size, file) <= 0)
 		goto out2;
 
-	if ((c = strstr(line, isolcpus))) {
-		char *end;
-		int len;
-
-		c += strlen(isolcpus);
-		for (end = c; *end != ' ' && *end != '\0' && *end != '\n'; end++);
-		len = end - c;
-
-		cpulist_parse(c, len, banned_cpus);
-	}
+	find_cmdline_cpumask(isolcpus, line, banned_cpus);
 
  out2:
 	fclose(file);
